@@ -1,3 +1,31 @@
+# Networking locals
+locals {
+  create_networking = var.create_networking
+
+  subnet_appservices_id = local.create_networking ? "${azurerm_virtual_network.vnet-scepman[0].id}/subnets/${var.subnet_appservices_name}" : var.existing_subnet_appservices_id
+
+  subnet_endpoints_id = local.create_networking ? "${azurerm_virtual_network.vnet-scepman[0].id}/subnets/${var.subnet_endpoints_name}" : null
+
+  # Resolve subnet address prefixes: use explicit IPAM values if provided, otherwise auto-calculate from VNet address space when creating networking
+  subnet_appservices_address_prefix = var.subnet_appservices_address_prefix != null ? var.subnet_appservices_address_prefix : (local.create_networking ? cidrsubnet(var.vnet_address_space[0], 3, 0) : null)
+  subnet_endpoints_address_prefix   = var.subnet_endpoints_address_prefix != null ? var.subnet_endpoints_address_prefix : (local.create_networking ? cidrsubnet(var.vnet_address_space[0], 3, 1) : null)
+}
+
+# Apply-time validation for BYOS mode.
+# Uses a check block so computed/unknown values (e.g., subnet IDs from other modules) pass plan
+# and are validated at apply. When values are known at plan time, validation fires immediately.
+check "byos_subnet_appservices_required" {
+  assert {
+    condition     = var.create_networking || var.existing_subnet_appservices_id != null
+    error_message = "existing_subnet_appservices_id is required when create_networking is false."
+  }
+
+  assert {
+    condition     = var.create_networking || can(regex("(?i)^/subscriptions/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$", var.existing_subnet_appservices_id))
+    error_message = "existing_subnet_appservices_id must be a valid Azure subnet resource ID when create_networking is false."
+  }
+}
+
 # Artifacts URL
 locals {
   # Base URL for the artifacts hosted by GK
@@ -118,8 +146,8 @@ locals {
 
   // Normalize input app settings to use ":" as separator for easier merging
   normalized_app_settings_primary = { for k, v in var.app_settings_primary : replace(k, "__", ":") => v }
-  // Merge maps will overwrite first by last > default variables, custom variables, resource variables
-  merged_app_settings_primary = merge(local.app_settings_primary_defaults, local.normalized_app_settings_primary, local.app_settings_primary_app_insights, local.app_settings_primary_base, local.app_settings_primary_app)
+  // Merge maps will overwrite first by last > defaults, computed values, then user-provided values win
+  merged_app_settings_primary = merge(local.app_settings_primary_defaults, local.app_settings_primary_app_insights, local.app_settings_primary_base, local.app_settings_primary_app, local.normalized_app_settings_primary)
   // If OS is linux, replace ":" with"__" in app settings, if OS is windows (NOT linux), replace "__" with ":" in app settings
   app_settings_primary = lower(var.service_plan_os_type) == "linux" ? { for k, v in local.merged_app_settings_primary : replace(k, ":", "__") => v } : { for k, v in local.merged_app_settings_primary : replace(k, "__", ":") => v }
 
@@ -186,8 +214,8 @@ locals {
 
   // Normalize input app settings to use ":" as separator for easier merging
   normalized_app_settings_certificate_master = { for k, v in var.app_settings_certificate_master : replace(k, "__", ":") => v }
-  // Merge maps will overwrite first by last > default variables, custom variables, resource variables
-  merged_app_settings_certificate_master = merge(local.app_settings_certificate_master_defaults, local.normalized_app_settings_certificate_master, local.app_settings_certificate_master_app_insights, local.app_settings_certificate_master_base, local.app_settings_certificate_master_app)
+  // Merge maps will overwrite first by last > defaults, computed values, then user-provided values win
+  merged_app_settings_certificate_master = merge(local.app_settings_certificate_master_defaults, local.app_settings_certificate_master_app_insights, local.app_settings_certificate_master_base, local.app_settings_certificate_master_app, local.normalized_app_settings_certificate_master)
   // If OS is linux, replace ":" with"__" in app settings, if OS is windows (NOT linux), replace "__" with ":" in app settings
   app_settings_certificate_master = lower(var.service_plan_os_type) == "linux" ? { for k, v in local.merged_app_settings_certificate_master : replace(k, ":", "__") => v } : { for k, v in local.merged_app_settings_certificate_master : replace(k, "__", ":") => v }
 
